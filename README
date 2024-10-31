@@ -1,0 +1,4 @@
+R-Car PCI Interface driver
+=====
+The driver, R-Car PCI Interface supports communication between R-Car PCIe Root Complex and Endpoint devices,
+and also connects the kernel and user space.
