@@ -101,7 +101,8 @@ static int rcar_pci_epf_write(struct rcar_pci_epf_private *priv)
 		goto error;
 	}
 
-	ret = pci_epc_map_addr(epc, epf->func_no, phys_addr, reg->dst_addr, reg->tx_size);
+	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no,
+			       phys_addr, reg->dst_addr, reg->tx_size);
 	if (ret) {
 		dev_err(dev, "Failed to map address\n");
 		reg->status = STATUS_DST_ADDR_INVALID;
@@ -118,7 +119,7 @@ static int rcar_pci_epf_write(struct rcar_pci_epf_private *priv)
 
 	usleep_range(1000, 2000);
 
-	pci_epc_unmap_addr(epc, epf->func_no, phys_addr);
+	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, phys_addr);
 
 err_addr:
 	pci_epc_mem_free_addr(epc, phys_addr, dst_addr, reg->size);
@@ -148,7 +149,8 @@ static int rcar_pci_epf_read(struct rcar_pci_epf_private *priv)
 		goto error;
 	}
 
-	ret = pci_epc_map_addr(epc, epf->func_no, phys_addr, reg->src_addr, reg->size);
+	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no,
+			       phys_addr, reg->src_addr, reg->size);
 	if (ret) {
 		dev_err(dev, "Failed to map address\n");
 		reg->status = STATUS_SRC_ADDR_INVALID;
@@ -182,7 +184,7 @@ static int rcar_pci_epf_read(struct rcar_pci_epf_private *priv)
 	mutex_unlock(&priv->rx_lock);
 
 err_map_addr:
-	pci_epc_unmap_addr(epc, epf->func_no, phys_addr);
+	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, phys_addr);
 
 err_addr:
 	pci_epc_mem_free_addr(epc, phys_addr, src_addr, reg->size);
@@ -203,13 +205,13 @@ static void rcar_pci_epf_raise_irq(struct rcar_pci_epf_private *priv, u8 irq_typ
 
 	switch (irq_type) {
 	case IRQ_TYPE_LEGACY:
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_LEGACY, 0);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_LEGACY, 0);
 		break;
 	case IRQ_TYPE_MSI:
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_MSI, irq);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_MSI, irq);
 		break;
 	case IRQ_TYPE_MSIX:
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_MSIX, irq);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_MSIX, irq);
 		break;
 	default:
 		dev_err(dev, "Failed to raise IRQ, unknown type\n");
@@ -243,7 +245,8 @@ static void rcar_pci_epf_cmd_handler(struct work_struct *work)
 
 	if (command & COMMAND_RAISE_LEGACY_IRQ) {
 		reg->status = STATUS_IRQ_RAISED;
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_LEGACY, 0);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
+				  PCI_EPC_IRQ_LEGACY, 0);
 		goto reset_handler;
 	}
 
@@ -272,25 +275,27 @@ static void rcar_pci_epf_cmd_handler(struct work_struct *work)
 	}
 
 	if (command & COMMAND_RAISE_MSI_IRQ) {
-		count = pci_epc_get_msi(epc, epf->func_no);
+		count = pci_epc_get_msi(epc, epf->func_no, epf->vfunc_no);
 		if (reg->irq_number > count || count <= 0)
 			goto reset_handler;
 
 		reg->status = STATUS_IRQ_RAISED;
 
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_MSI, reg->irq_number);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
+				  PCI_EPC_IRQ_MSI, reg->irq_number);
 
 		goto reset_handler;
 	}
 
 	if (command & COMMAND_RAISE_MSIX_IRQ) {
-		count = pci_epc_get_msix(epc, epf->func_no);
+		count = pci_epc_get_msix(epc, epf->func_no, epf->vfunc_no);
 		if (reg->irq_number > count || count <= 0)
 			goto reset_handler;
 
 		reg->status = STATUS_IRQ_RAISED;
 
-		pci_epc_raise_irq(epc, epf->func_no, PCI_EPC_IRQ_MSIX, reg->irq_number);
+		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
+				  PCI_EPC_IRQ_MSIX, reg->irq_number);
 
 		goto reset_handler;
 	}
@@ -325,9 +330,9 @@ static int rcar_pci_epf_set_bar(struct pci_epf *epf)
 		if (!!(epc_features->reserved_bar & (1 << bar)))
 			continue;
 
-		ret = pci_epc_set_bar(epc, epf->func_no, epf_bar);
+		ret = pci_epc_set_bar(epc, epf->func_no, epf->vfunc_no, epf_bar);
 		if (ret) {
-			pci_epf_free_space(epf, priv->reg[bar], bar);
+			pci_epf_free_space(epf, priv->reg[bar], bar, PRIMARY_INTERFACE);
 			dev_err(dev, "Failed to set BAR%d\n", bar);
 			if (bar == reg_bar)
 				return ret;
@@ -348,16 +353,18 @@ static int rcar_pci_epf_core_init(struct pci_epf *epf)
 	bool msi_capable = true;
 	int ret;
 
-	epc_features = pci_epc_get_features(epc, epf->func_no);
+	epc_features = pci_epc_get_features(epc, epf->func_no, epf->vfunc_no);
 	if (epc_features) {
 		msix_capable = epc_features->msix_capable;
 		msi_capable = epc_features->msi_capable;
 	}
 
-	ret = pci_epc_write_header(epc, epf->func_no, header);
-	if (ret) {
-		dev_err(dev, "Configuration header write failed\n");
-		return ret;
+	if (epf->vfunc_no <= 1) {
+		ret = pci_epc_write_header(epc, epf->func_no, epf->vfunc_no, header);
+		if (ret) {
+			dev_err(dev, "Configuration header write failed\n");
+			return ret;
+		}
 	}
 
 	ret = rcar_pci_epf_set_bar(epf);
@@ -365,7 +372,8 @@ static int rcar_pci_epf_core_init(struct pci_epf *epf)
 		return ret;
 
 	if (msi_capable) {
-		ret = pci_epc_set_msi(epc, epf->func_no, epf->msi_interrupts);
+		ret = pci_epc_set_msi(epc, epf->func_no, epf->vfunc_no,
+				      epf->msi_interrupts);
 		if (ret) {
 			dev_err(dev, "MSI configuration failed\n");
 			return ret;
@@ -373,8 +381,9 @@ static int rcar_pci_epf_core_init(struct pci_epf *epf)
 	}
 
 	if (msix_capable) {
-		ret = pci_epc_set_msix(epc, epf->func_no, epf->msix_interrupts,
-					    priv->reg_bar, priv->msix_table_offset);
+		ret = pci_epc_set_msix(epc, epf->func_no, epf->vfunc_no,
+				       epf->msix_interrupts, priv->reg_bar,
+				       priv->msix_table_offset);
 
 		if (ret) {
 			dev_err(dev, "MSI-X configuration failed\n");
@@ -445,7 +454,8 @@ static int rcar_pci_epf_alloc_space(struct pci_epf *epf)
 		reg_size = bar_size[reg_bar];
 	}
 
-	base = pci_epf_alloc_space(epf, reg_size, reg_bar, epc_features->align);
+	base = pci_epf_alloc_space(epf, reg_size, reg_bar,
+				   epc_features->align, PRIMARY_INTERFACE);
 	if (!base) {
 		dev_err(dev, "Failed to allocated register space\n");
 		return -ENOMEM;
@@ -463,7 +473,9 @@ static int rcar_pci_epf_alloc_space(struct pci_epf *epf)
 		if (!!(epc_features->reserved_bar & (1 << bar)))
 			continue;
 
-		base = pci_epf_alloc_space(epf, bar_size[bar], bar, epc_features->align);
+		base = pci_epf_alloc_space(epf, bar_size[bar], bar,
+					   epc_features->align,
+					   PRIMARY_INTERFACE);
 		if (!base)
 			dev_err(dev, "Failed to allocate space for BAR%d\n", bar);
 
@@ -649,7 +661,7 @@ static int rcar_pci_epf_bind(struct pci_epf *epf)
 	if (WARN_ON_ONCE(!epc))
 		return -EINVAL;
 
-	epc_features = pci_epc_get_features(epc, epf->func_no);
+	epc_features = pci_epc_get_features(epc, epf->func_no, epf->vfunc_no);
 	if (!epc_features) {
 		dev_err(&epf->dev, "epc_features not implemented\n");
 		return -EOPNOTSUPP;
@@ -678,7 +690,7 @@ static int rcar_pci_epf_bind(struct pci_epf *epf)
 
 	/* TODO: DMA support */
 
-	if (linkup_notifier) {
+	if (linkup_notifier || core_init_notifier) {
 		epf->nb.notifier_call = rcar_pci_epf_notifier;
 		pci_epc_register_notifier(epc, &epf->nb);
 	} else {
@@ -701,8 +713,8 @@ static void rcar_pci_epf_unbind(struct pci_epf *epf)
 		epf_bar = &epf->bar[bar];
 
 		if (priv->reg[bar]) {
-			pci_epc_clear_bar(epc, epf->func_no, epf_bar);
-			pci_epf_free_space(epf, priv->reg[bar], bar);
+			pci_epc_clear_bar(epc, epf->func_no, epf->vfunc_no, epf_bar);
+			pci_epf_free_space(epf, priv->reg[bar], bar, PRIMARY_INTERFACE);
 		}
 	}
 
